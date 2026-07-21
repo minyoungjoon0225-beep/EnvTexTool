@@ -1,0 +1,15 @@
+{
+    "Version": "1.2",
+    "Data": {
+        "Source": "d:\\lycoris\\lycoris_main\\plugins\\envmaterialinspector\\source\\envmaterialinspector\\private\\basecolorclusteranalyzer.cpp",
+        "ProvidedModule": "",
+        "PCH": "d:\\lycoris\\lycoris_main\\intermediate\\build\\win64\\x64\\lycoriseditor\\development\\unrealed\\sharedpch.unrealed.project.valapi.valexpapi.cpp20.h.pch",
+        "Includes": [
+            "d:\\lycoris\\lycoris_main\\plugins\\envmaterialinspector\\intermediate\\build\\win64\\x64\\unrealeditor\\development\\envmaterialinspector\\definitions.envmaterialinspector.h",
+            "d:\\lycoris\\lycoris_main\\plugins\\envmaterialinspector\\source\\envmaterialinspector\\public\\basecolorclusteranalyzer.h",
+            "d:\\unreal5.7.4\\ue_5.7\\engine\\source\\developer\\texturecompressor\\public\\texturecompressormodule.h"
+        ],
+        "ImportedModules": [],
+        "ImportedHeaderUnits": []
+    }
+}

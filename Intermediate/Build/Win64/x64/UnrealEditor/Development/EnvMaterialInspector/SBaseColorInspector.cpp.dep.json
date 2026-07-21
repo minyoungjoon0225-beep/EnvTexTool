@@ -1,0 +1,31 @@
+{
+    "Version": "1.2",
+    "Data": {
+        "Source": "d:\\lycoris\\lycoris_main\\plugins\\envmaterialinspector\\source\\envmaterialinspector\\private\\sbasecolorinspector.cpp",
+        "ProvidedModule": "",
+        "PCH": "d:\\lycoris\\lycoris_main\\intermediate\\build\\win64\\x64\\lycoriseditor\\development\\unrealed\\sharedpch.unrealed.project.valapi.valexpapi.cpp20.h.pch",
+        "Includes": [
+            "d:\\lycoris\\lycoris_main\\plugins\\envmaterialinspector\\intermediate\\build\\win64\\x64\\unrealeditor\\development\\envmaterialinspector\\definitions.envmaterialinspector.h",
+            "d:\\lycoris\\lycoris_main\\plugins\\envmaterialinspector\\source\\envmaterialinspector\\private\\sbasecolorinspector.h",
+            "d:\\lycoris\\lycoris_main\\plugins\\envmaterialinspector\\source\\envmaterialinspector\\public\\basecolorclusteranalyzer.h",
+            "d:\\unreal5.7.4\\ue_5.7\\engine\\source\\runtime\\slate\\public\\widgets\\colors\\scolorblock.h",
+            "d:\\unreal5.7.4\\ue_5.7\\engine\\source\\runtime\\slate\\public\\widgets\\input\\snumericentrybox.h",
+            "d:\\unreal5.7.4\\ue_5.7\\engine\\source\\runtime\\slate\\public\\widgets\\input\\sspinbox.h",
+            "d:\\unreal5.7.4\\ue_5.7\\engine\\source\\runtime\\slate\\public\\widgets\\layout\\suniformgridpanel.h",
+            "d:\\unreal5.7.4\\ue_5.7\\engine\\source\\runtime\\slate\\public\\widgets\\layout\\swidgetswitcher.h",
+            "d:\\unreal5.7.4\\ue_5.7\\engine\\source\\editor\\propertyeditor\\public\\propertycustomizationhelpers.h",
+            "d:\\unreal5.7.4\\ue_5.7\\engine\\source\\editor\\propertyeditor\\public\\idetailcustomnodebuilder.h",
+            "d:\\unreal5.7.4\\ue_5.7\\engine\\source\\editor\\propertyeditor\\public\\detailwidgetrow.h",
+            "d:\\unreal5.7.4\\ue_5.7\\engine\\source\\editor\\propertyeditor\\public\\idetailpropertyrow.h",
+            "d:\\unreal5.7.4\\ue_5.7\\engine\\source\\editor\\propertyeditor\\public\\detailcategorybuilder.h",
+            "d:\\unreal5.7.4\\ue_5.7\\engine\\source\\editor\\propertyeditor\\public\\detailbuildertypes.h",
+            "d:\\unreal5.7.4\\ue_5.7\\engine\\source\\editor\\propertyeditor\\public\\propertyeditorcopypaste.h",
+            "d:\\unreal5.7.4\\ue_5.7\\engine\\source\\editor\\propertyeditor\\public\\sresettodefaultmenu.h",
+            "d:\\unreal5.7.4\\ue_5.7\\engine\\source\\editor\\actorpickermode\\public\\actorpickermode.h",
+            "d:\\unreal5.7.4\\ue_5.7\\engine\\source\\editor\\scenedepthpickermode\\public\\scenedepthpickermode.h",
+            "d:\\unreal5.7.4\\ue_5.7\\engine\\source\\editor\\classviewer\\public\\classviewermodule.h"
+        ],
+        "ImportedModules": [],
+        "ImportedHeaderUnits": []
+    }
+}

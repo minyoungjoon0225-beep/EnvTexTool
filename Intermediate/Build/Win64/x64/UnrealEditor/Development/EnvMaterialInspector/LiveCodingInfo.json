@@ -1,0 +1,11 @@
+{
+	"RemapUnityFiles": 
+	{
+		"Module.EnvMaterialInspector.cpp.obj": [
+			"PerModuleInline.gen.cpp.obj",
+			"BaseColorClusterAnalyzer.cpp.obj",
+			"EnvMaterialInspector.cpp.obj",
+			"SBaseColorInspector.cpp.obj"
+		]
+	}
+}

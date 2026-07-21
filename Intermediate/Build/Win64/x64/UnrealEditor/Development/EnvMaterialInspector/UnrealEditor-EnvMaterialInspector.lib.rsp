@@ -1,0 +1,15 @@
+/NOLOGO
+/errorReport:prompt
+/MACHINE:x64
+/SUBSYSTEM:WINDOWS
+/DEF
+/NAME:"UnrealEditor-EnvMaterialInspector.dll"
+/IGNORE:4221
+/NODEFAULTLIB
+"D:/Lycoris/Lycoris_main/Intermediate/Build/Win64/x64/LycorisEditor/Development/UnrealEd/SharedPCH.UnrealEd.Project.ValApi.ValExpApi.Cpp20.h.obj"
+"D:/Lycoris/Lycoris_main/Plugins/EnvMaterialInspector/Intermediate/Build/Win64/x64/UnrealEditor/Development/EnvMaterialInspector/Module.EnvMaterialInspector.cpp.obj"
+"D:/Lycoris/Lycoris_main/Plugins/EnvMaterialInspector/Intermediate/Build/Win64/x64/UnrealEditor/Development/EnvMaterialInspector/BaseColorClusterAnalyzer.cpp.obj"
+"D:/Lycoris/Lycoris_main/Plugins/EnvMaterialInspector/Intermediate/Build/Win64/x64/UnrealEditor/Development/EnvMaterialInspector/EnvMaterialInspector.cpp.obj"
+"D:/Lycoris/Lycoris_main/Plugins/EnvMaterialInspector/Intermediate/Build/Win64/x64/UnrealEditor/Development/EnvMaterialInspector/SBaseColorInspector.cpp.obj"
+"D:/Lycoris/Lycoris_main/Plugins/EnvMaterialInspector/Intermediate/Build/Win64/x64/UnrealEditor/Development/EnvMaterialInspector/Default.rc2.res"
+/OUT:"D:/Lycoris/Lycoris_main/Plugins/EnvMaterialInspector/Intermediate/Build/Win64/x64/UnrealEditor/Development/EnvMaterialInspector/UnrealEditor-EnvMaterialInspector.lib"

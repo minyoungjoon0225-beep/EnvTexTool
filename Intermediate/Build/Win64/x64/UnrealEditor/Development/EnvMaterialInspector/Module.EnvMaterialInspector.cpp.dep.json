@@ -1,0 +1,15 @@
+{
+    "Version": "1.2",
+    "Data": {
+        "Source": "d:\\lycoris\\lycoris_main\\plugins\\envmaterialinspector\\intermediate\\build\\win64\\x64\\unrealeditor\\development\\envmaterialinspector\\module.envmaterialinspector.cpp",
+        "ProvidedModule": "",
+        "PCH": "d:\\lycoris\\lycoris_main\\intermediate\\build\\win64\\x64\\lycoriseditor\\development\\unrealed\\sharedpch.unrealed.project.valapi.valexpapi.cpp20.h.pch",
+        "Includes": [
+            "d:\\lycoris\\lycoris_main\\plugins\\envmaterialinspector\\intermediate\\build\\win64\\x64\\unrealeditor\\development\\envmaterialinspector\\definitions.envmaterialinspector.h",
+            "d:\\lycoris\\lycoris_main\\plugins\\envmaterialinspector\\intermediate\\build\\win64\\x64\\unrealeditor\\development\\envmaterialinspector\\permoduleinline.gen.cpp",
+            "d:\\unreal5.7.4\\ue_5.7\\engine\\source\\runtime\\core\\public\\hal\\permoduleinline.inl"
+        ],
+        "ImportedModules": [],
+        "ImportedHeaderUnits": []
+    }
+}
