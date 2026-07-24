@@ -29,6 +29,7 @@ public:
 		SLATE_ARGUMENT(const FSlateBrush*, Image)
 		SLATE_ARGUMENT(FVector2D, ImageSize)
 		SLATE_ARGUMENT(float, InitialZoom)
+		SLATE_ARGUMENT(bool, FitToView)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs)
@@ -37,12 +38,25 @@ public:
 		ImageSize = InArgs._ImageSize;
 		InitialZoom = FMath::Max(1.0f, InArgs._InitialZoom);
 		Zoom = InitialZoom;
+		bFitToView = InArgs._FitToView;
+		bPendingFit = bFitToView;
 		SetClipping(EWidgetClipping::ClipToBounds);
 	}
 
 	virtual FVector2D ComputeDesiredSize(float) const override
 	{
 		return FVector2D(720.0f, 520.0f);
+	}
+
+	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime,
+		const float InDeltaTime) override
+	{
+		if (bPendingFit)
+		{
+			ResetToFit(AllottedGeometry.GetLocalSize());
+			bPendingFit = false;
+			Invalidate(EInvalidateWidgetReason::Paint);
+		}
 	}
 
 	virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry,
@@ -97,7 +111,9 @@ public:
 	{
 		const FVector2D Cursor = MyGeometry.AbsoluteToLocal(MouseEvent.GetScreenSpacePosition());
 		const FVector2D ImagePoint = (Cursor - PanOffset) / Zoom;
-		Zoom = FMath::Clamp(Zoom * FMath::Pow(1.2f, MouseEvent.GetWheelDelta()), 1.0f, 32.0f);
+		const float MinimumZoom = bFitToView ? FitZoom : 1.0f;
+		Zoom = FMath::Clamp(
+			Zoom * FMath::Pow(1.2f, MouseEvent.GetWheelDelta()), MinimumZoom, 32.0f);
 		PanOffset = Cursor - ImagePoint * Zoom;
 		Invalidate(EInvalidateWidgetReason::Paint);
 		return FReply::Handled();
@@ -107,8 +123,15 @@ public:
 	{
 		if (MouseEvent.GetEffectingButton() == EKeys::LeftMouseButton)
 		{
-			Zoom = InitialZoom;
-			PanOffset = FVector2D::ZeroVector;
+			if (bFitToView)
+			{
+				ResetToFit(MyGeometry.GetLocalSize());
+			}
+			else
+			{
+				Zoom = InitialZoom;
+				PanOffset = FVector2D::ZeroVector;
+			}
 			Invalidate(EInvalidateWidgetReason::Paint);
 			return FReply::Handled();
 		}
@@ -116,12 +139,29 @@ public:
 	}
 
 private:
+	void ResetToFit(const FVector2D& ViewportSize)
+	{
+		if (ImageSize.X <= 0.0f || ImageSize.Y <= 0.0f ||
+			ViewportSize.X <= 0.0f || ViewportSize.Y <= 0.0f)
+		{
+			return;
+		}
+
+		FitZoom = FMath::Min(ViewportSize.X / ImageSize.X, ViewportSize.Y / ImageSize.Y);
+		FitZoom = FMath::Max(FitZoom, 0.001f);
+		Zoom = FitZoom;
+		PanOffset = (ViewportSize - ImageSize * Zoom) * 0.5f;
+	}
+
 	const FSlateBrush* Image = nullptr;
 	FVector2D ImageSize = FVector2D::ZeroVector;
 	FVector2D PanOffset = FVector2D::ZeroVector;
 	FVector2D LastCursorPosition = FVector2D::ZeroVector;
 	float InitialZoom = 8.0f;
 	float Zoom = 8.0f;
+	float FitZoom = 1.0f;
+	bool bFitToView = false;
+	bool bPendingFit = false;
 };
 
 namespace
@@ -422,6 +462,46 @@ bool SBaseColorInspector::BuildColorVariationHeatmapPreview(
 	return true;
 }
 
+bool SBaseColorInspector::BuildTilingPreview(const FBaseColorAnalysisResult& Result)
+{
+	TilingPreviewTexture.Reset();
+	TilingPreviewBrush.SetResourceObject(nullptr);
+	const FTilingPreviewResult& Tiling = Result.TilingPreview;
+	if (Tiling.PreviewWidth <= 0 || Tiling.PreviewHeight <= 0 ||
+		Tiling.PreviewPixels.Num() != Tiling.PreviewWidth * Tiling.PreviewHeight)
+	{
+		return false;
+	}
+
+	UTexture2D* Texture = UTexture2D::CreateTransient(
+		Tiling.PreviewWidth, Tiling.PreviewHeight, PF_B8G8R8A8, TEXT("BaseColor2x2TilingPreview"));
+	if (!Texture || !Texture->GetPlatformData() || Texture->GetPlatformData()->Mips.IsEmpty())
+	{
+		return false;
+	}
+
+	Texture->SRGB = true;
+	Texture->Filter = TF_Bilinear;
+	Texture->NeverStream = true;
+	FTexture2DMipMap& Mip = Texture->GetPlatformData()->Mips[0];
+	FColor* Destination = static_cast<FColor*>(Mip.BulkData.Lock(LOCK_READ_WRITE));
+	if (!Destination)
+	{
+		Mip.BulkData.Unlock();
+		return false;
+	}
+	FMemory::Memcpy(Destination, Tiling.PreviewPixels.GetData(),
+		Tiling.PreviewPixels.Num() * sizeof(FColor));
+	Mip.BulkData.Unlock();
+	Texture->UpdateResource();
+
+	TilingPreviewTexture.Reset(Texture);
+	TilingPreviewBrush.SetResourceObject(Texture);
+	TilingPreviewBrush.ImageSize = FVector2D(Tiling.PreviewWidth, Tiling.PreviewHeight);
+	TilingPreviewBrush.DrawAs = ESlateBrushDrawType::Image;
+	return true;
+}
+
 bool SBaseColorInspector::BuildHueContrastHeatmapPreview(const FBaseColorAnalysisResult& Result)
 {
 	HueContrastHeatmapTexture.Reset();
@@ -493,7 +573,7 @@ FReply SBaseColorInspector::HandleAnalyzeClicked()
 			FormatPercent(Result.PixelVariation.MicroJumpRate),
 			FormatPercent(Result.PixelVariation.FarViewCohesion));
 		ClassificationBasisTooltip = FText::Format(
-			LOCTEXT("HarmoniousClassificationBasisTooltip", "相邻1px跳变率 {0} 较高，但远距离融合度 {1} 也较高，说明细节丰富且缩小后能够融合为和谐整体。"),
+			LOCTEXT("HarmoniousClassificationBasisTooltip", "归一化微观跳变率 {0} 较高，但远距离融合度 {1} 也较高，说明细节丰富且缩小后能够融合为和谐整体。"),
 			FormatPercent(Result.PixelVariation.MicroJumpRate),
 			FormatPercent(Result.PixelVariation.FarViewCohesion));
 		break;
@@ -505,7 +585,7 @@ FReply SBaseColorInspector::HandleAnalyzeClicked()
 			FormatPercent(Result.PixelVariation.MicroJumpRate),
 			FormatPercent(Result.PixelVariation.FarViewCohesion));
 		ClassificationBasisTooltip = FText::Format(
-			LOCTEXT("PersistentMosaicClassificationBasisTooltip", "相邻1px跳变率 {0} 较高，同时远距离融合度 {1} 较低，说明颜色边界在缩小后仍可能持续存在。"),
+			LOCTEXT("PersistentMosaicClassificationBasisTooltip", "归一化微观跳变率 {0} 较高，同时远距离融合度 {1} 较低，说明颜色边界在缩小后仍可能持续存在。"),
 			FormatPercent(Result.PixelVariation.MicroJumpRate),
 			FormatPercent(Result.PixelVariation.FarViewCohesion));
 		break;
@@ -517,7 +597,7 @@ FReply SBaseColorInspector::HandleAnalyzeClicked()
 			FormatPercent(Result.PixelVariation.MicroJumpRate),
 			FormatPercent(Result.PixelVariation.FarViewCohesion));
 		ClassificationBasisTooltip = FText::Format(
-			LOCTEXT("LargeColorBlockClassificationBasisTooltip", "相邻1px跳变率 {0} 较低，但远距离融合度 {1} 也较低，说明局部较平滑但存在缩小后仍可见的大色块结构。"),
+			LOCTEXT("LargeColorBlockClassificationBasisTooltip", "归一化微观跳变率 {0} 较低，但远距离融合度 {1} 也较低，说明局部较平滑但存在缩小后仍可见的大色块结构。"),
 			FormatPercent(Result.PixelVariation.MicroJumpRate),
 			FormatPercent(Result.PixelVariation.FarViewCohesion));
 		break;
@@ -529,7 +609,7 @@ FReply SBaseColorInspector::HandleAnalyzeClicked()
 			FormatPercent(Result.PixelVariation.MicroJumpRate),
 			FormatPercent(Result.PixelVariation.FarViewCohesion));
 		ClassificationBasisTooltip = FText::Format(
-			LOCTEXT("SmoothClassificationBasisTooltip", "相邻1px跳变率 {0} 较低，远距离融合度 {1} 较高，说明局部连续且缩小后整体和谐。"),
+			LOCTEXT("SmoothClassificationBasisTooltip", "归一化微观跳变率 {0} 较低，远距离融合度 {1} 较高，说明局部连续且缩小后整体和谐。"),
 			FormatPercent(Result.PixelVariation.MicroJumpRate),
 			FormatPercent(Result.PixelVariation.FarViewCohesion));
 		break;
@@ -613,8 +693,9 @@ FReply SBaseColorInspector::HandleAnalyzeClicked()
 		Result.MacroVariationHeatmap, Result.ColorVariationHeatmapWidth, Result.ColorVariationHeatmapHeight,
 		FName(TEXT("BaseColorMacroVariationHeatmap")), MacroVariationHeatmapTexture, MacroVariationHeatmapBrush);
 	const bool bHasHueContrastHeatmap = BuildHueContrastHeatmapPreview(Result);
+	const bool bHasTilingPreview = BuildTilingPreview(Result);
 	if (bHasClusterPreview || bHasMicroVariationHeatmap || bHasMesoVariationHeatmap ||
-		bHasMacroVariationHeatmap || bHasHueContrastHeatmap)
+		bHasMacroVariationHeatmap || bHasHueContrastHeatmap || bHasTilingPreview)
 	{
 		PreviewColumn->AddSlot().AutoHeight().Padding(0.0f, 14.0f, 0.0f, 6.0f)
 		[
@@ -647,8 +728,8 @@ FReply SBaseColorInspector::HandleAnalyzeClicked()
 			+ SHorizontalBox::Slot().FillWidth(1.0f)
 			[
 				SNew(SButton)
-				.Text(LOCTEXT("MicroHeatmap", "1 px"))
-				.ToolTipText(LOCTEXT("MicroHeatmapTooltip", "1 像素跳变密度"))
+				.Text(FText::Format(LOCTEXT("MicroHeatmapFormat", "{0} px"), Result.PixelVariation.MicroOffset))
+				.ToolTipText(FText::Format(LOCTEXT("MicroHeatmapTooltipFormat", "微观跳变密度；当前源像素间距 {0}px。"), Result.PixelVariation.MicroOffset))
 				.ButtonColorAndOpacity_Lambda([this]()
 				{
 					return ActivePreviewIndex == 1
@@ -666,8 +747,8 @@ FReply SBaseColorInspector::HandleAnalyzeClicked()
 			+ SHorizontalBox::Slot().FillWidth(1.0f)
 			[
 				SNew(SButton)
-				.Text(LOCTEXT("MesoHeatmap", "4 px"))
-				.ToolTipText(LOCTEXT("MesoHeatmapTooltip", "4 像素跳变密度"))
+				.Text(FText::Format(LOCTEXT("MesoHeatmapFormat", "{0} px"), Result.PixelVariation.MesoOffset))
+				.ToolTipText(FText::Format(LOCTEXT("MesoHeatmapTooltipFormat", "中尺度跳变密度；当前源像素间距 {0}px。"), Result.PixelVariation.MesoOffset))
 				.ButtonColorAndOpacity_Lambda([this]()
 				{
 					return ActivePreviewIndex == 2
@@ -685,8 +766,8 @@ FReply SBaseColorInspector::HandleAnalyzeClicked()
 			+ SHorizontalBox::Slot().FillWidth(1.0f)
 			[
 				SNew(SButton)
-				.Text(LOCTEXT("MacroHeatmap", "16 px"))
-				.ToolTipText(LOCTEXT("MacroHeatmapTooltip", "16 像素跳变密度"))
+				.Text(FText::Format(LOCTEXT("MacroHeatmapFormat", "{0} px"), Result.PixelVariation.MacroOffset))
+				.ToolTipText(FText::Format(LOCTEXT("MacroHeatmapTooltipFormat", "宏观跳变密度；当前源像素间距 {0}px。"), Result.PixelVariation.MacroOffset))
 				.ButtonColorAndOpacity_Lambda([this]()
 				{
 					return ActivePreviewIndex == 3
@@ -717,6 +798,25 @@ FReply SBaseColorInspector::HandleAnalyzeClicked()
 				{
 					ActivePreviewIndex = 4;
 					if (PreviewSwitcher.IsValid()) PreviewSwitcher->SetActiveWidgetIndex(4);
+					return FReply::Handled();
+				})
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.0f)
+			[
+				SNew(SButton)
+				.Text(LOCTEXT("TilingPreviewMode", "2x2 Tiling"))
+				.ToolTipText(LOCTEXT("TilingPreviewTooltip", "2×2 平铺预览，用于观察接缝和重复图案。"))
+				.ButtonColorAndOpacity_Lambda([this]()
+				{
+					return ActivePreviewIndex == 5
+						? FSlateColor(FLinearColor(0.18f, 0.42f, 0.75f, 1.0f))
+						: FSlateColor(FLinearColor::White);
+				})
+				.IsEnabled(bHasTilingPreview)
+				.OnClicked_Lambda([this]()
+				{
+					ActivePreviewIndex = 5;
+					if (PreviewSwitcher.IsValid()) PreviewSwitcher->SetActiveWidgetIndex(5);
 					return FReply::Handled();
 				})
 			]
@@ -756,6 +856,14 @@ FReply SBaseColorInspector::HandleAnalyzeClicked()
 				.Image(&HueContrastHeatmapBrush)
 				.ImageSize(HueContrastHeatmapBrush.ImageSize)
 				.InitialZoom(8.0f)
+			]
+			+ SWidgetSwitcher::Slot()
+			[
+				SNew(SDraggableMosaicViewport)
+					.Image(&TilingPreviewBrush)
+					.ImageSize(TilingPreviewBrush.ImageSize)
+					.InitialZoom(1.0f)
+					.FitToView(true)
 			];
 		if (bHasMicroVariationHeatmap)
 		{
@@ -775,8 +883,9 @@ FReply SBaseColorInspector::HandleAnalyzeClicked()
 		PreviewColumn->AddSlot().AutoHeight().Padding(0.0f, 4.0f)
 		[
 			SNew(STextBlock)
-			.Text(LOCTEXT("PreviewHelp", "Left-drag to pan, mouse wheel to zoom, double-click to reset. Darker = higher jump density."))
-			.ToolTipText(LOCTEXT("PreviewHelpTooltip", "左键拖动平移，滚轮缩放，双击重置。颜色越黑表示跳变密度越高。"))
+			.Text(LOCTEXT("PreviewHelp", "Left-drag to pan, mouse wheel to zoom, double-click to reset. Heatmaps: darker = stronger response."))
+			.ToolTipText(LOCTEXT("PreviewHelpTooltip",
+				"左键拖动平移，滚轮缩放，双击重置。热图越黑表示局部响应越强；2×2 Tiling 用于直接观察左右和上下接缝。"))
 			.ColorAndOpacity(FSlateColor::UseSubduedForeground())
 		];
 	}
@@ -813,7 +922,7 @@ FReply SBaseColorInspector::HandleAnalyzeClicked()
 	];
 	ResultsBox->AddSlot().AutoHeight().Padding(0.0f, 2.0f)
 	[
-		MakeLabelValue(LOCTEXT("P95NeighborDifference", "P95 Local Pixel Difference"),
+		MakeLabelValue(FText::Format(LOCTEXT("P95NeighborDifferenceFormat", "P95 Local Pixel Difference ({0} px)"), Variation.MicroOffset),
 			FText::Format(LOCTEXT("P95DifferenceFormat", "{0} ({1}/255)"),
 				FormatMetric(Variation.P95NeighborDifference),
 				FText::AsNumber(FMath::RoundToInt(Variation.P95NeighborDifference * 255.0f))),
@@ -821,46 +930,46 @@ FReply SBaseColorInspector::HandleAnalyzeClicked()
 	];
 	ResultsBox->AddSlot().AutoHeight().Padding(0.0f, 2.0f)
 	[
-		MakeLabelValue(LOCTEXT("FarViewP95BlockDifference", "Far-view P95 Block Difference (16x16 average)"),
+		MakeLabelValue(FText::Format(LOCTEXT("FarViewP95BlockDifferenceLabelFormat", "Far-view P95 Block Difference ({0}x{0} average)"), Variation.FarViewBlockSize),
 			FText::Format(LOCTEXT("FarViewP95DifferenceFormat", "{0} ({1}/255)"),
 				FormatMetric(Variation.FarViewP95BlockDifference),
 				FText::AsNumber(FMath::RoundToInt(Variation.FarViewP95BlockDifference * 255.0f))),
-			LOCTEXT("FarViewP95BlockDifferenceTooltip",
-				"远距离 P95 色块差异：将每个 16×16 区域平均为一个颜色后，相邻平均色块 RGB 距离的第 95 百分位。"))
+			FText::Format(LOCTEXT("FarViewP95BlockDifferenceTooltipFormat",
+				"远距离 P95 色块差异：将每个 {0}×{0} 区域平均为一个颜色后，相邻平均色块 RGB 距离的第 95 百分位。"), Variation.FarViewBlockSize))
 	];
 	ResultsBox->AddSlot().AutoHeight().Padding(0.0f, 2.0f)
 	[
-		MakeLabelValue(LOCTEXT("FarViewCohesion", "Far-view Cohesion (16x16 average)"),
+		MakeLabelValue(FText::Format(LOCTEXT("FarViewCohesionLabelFormat", "Far-view Cohesion ({0}x{0} average)"), Variation.FarViewBlockSize),
 			FormatPercent(Variation.FarViewCohesion),
-			LOCTEXT("FarViewCohesionTooltip", "远距离融合度：先将每个 16×16 区域融合为平均色，再衡量相邻平均色块是否连续。"))
+			FText::Format(LOCTEXT("FarViewCohesionTooltipFormat", "远距离融合度：先将每个 {0}×{0} 区域融合为平均色，再衡量相邻平均色块是否连续。"), Variation.FarViewBlockSize))
 	];
 	ResultsBox->AddSlot().AutoHeight().Padding(0.0f, 2.0f)
 	[
-		MakeLabelValue(LOCTEXT("FarViewJumpRate", "Far-view Jump Rate (16x16 average)"),
+		MakeLabelValue(FText::Format(LOCTEXT("FarViewJumpRateLabelFormat", "Far-view Jump Rate ({0}x{0} average)"), Variation.FarViewBlockSize),
 			FormatPercent(Variation.FarViewJumpRate),
-			LOCTEXT("FarViewJumpRateTooltip", "远距离色块跳变率：相邻 16×16 平均色块差异超过 12/255 的比例。"))
+			FText::Format(LOCTEXT("FarViewJumpRateTooltipFormat", "远距离色块跳变率：相邻 {0}×{0} 平均色块差异超过 12/255 的比例。"), Variation.FarViewBlockSize))
 	];
 	ResultsBox->AddSlot().AutoHeight().Padding(0.0f, 2.0f)
 	[
 		MakeLabelValue(LOCTEXT("DetailDissolutionRatio", "Detail Dissolution Ratio"),
 			FormatPercent(Variation.DetailDissolutionRatio),
-			LOCTEXT("DetailDissolutionRatioTooltip",
-				"细节消解率：16×16 平均后消失的局部 P95 颜色差异比例。数值越高，表示细节在远处越容易融合。"))
+			FText::Format(LOCTEXT("DetailDissolutionRatioTooltipFormat",
+				"细节消解率：{0}×{0} 平均后消失的局部 P95 颜色差异比例。数值越高，表示细节在远处越容易融合。"), Variation.FarViewBlockSize))
 	];
 	ResultsBox->AddSlot().AutoHeight().Padding(0.0f, 2.0f)
 	[
-		MakeLabelValue(LOCTEXT("MicroJumpRate", "Micro Jump Rate (1 px)"),
-			FormatPercent(Variation.MicroJumpRate), LOCTEXT("MicroJumpTooltip", "相邻1px跳变率"))
+		MakeLabelValue(FText::Format(LOCTEXT("MicroJumpRateLabelFormat", "Micro Jump Rate ({0} px)"), Variation.MicroOffset),
+			FormatPercent(Variation.MicroJumpRate), FText::Format(LOCTEXT("MicroJumpTooltipFormat", "相邻 {0}px 跳变率；等效于 2048 参考分辨率下的 1px。"), Variation.MicroOffset))
 	];
 	ResultsBox->AddSlot().AutoHeight().Padding(0.0f, 2.0f)
 	[
-		MakeLabelValue(LOCTEXT("MesoJumpRate", "Meso Jump Rate (4 px)"),
-			FormatPercent(Variation.MesoJumpRate), LOCTEXT("MesoJumpTooltip", "相邻4px跳变率"))
+		MakeLabelValue(FText::Format(LOCTEXT("MesoJumpRateLabelFormat", "Meso Jump Rate ({0} px)"), Variation.MesoOffset),
+			FormatPercent(Variation.MesoJumpRate), FText::Format(LOCTEXT("MesoJumpTooltipFormat", "相邻 {0}px 跳变率；等效于 2048 参考分辨率下的 4px。"), Variation.MesoOffset))
 	];
 	ResultsBox->AddSlot().AutoHeight().Padding(0.0f, 2.0f)
 	[
-		MakeLabelValue(LOCTEXT("MacroJumpRate", "Macro Jump Rate (16 px)"),
-			FormatPercent(Variation.MacroJumpRate), LOCTEXT("MacroJumpTooltip", "相邻16px跳变率"))
+		MakeLabelValue(FText::Format(LOCTEXT("MacroJumpRateLabelFormat", "Macro Jump Rate ({0} px)"), Variation.MacroOffset),
+			FormatPercent(Variation.MacroJumpRate), FText::Format(LOCTEXT("MacroJumpTooltipFormat", "相邻 {0}px 跳变率；等效于 2048 参考分辨率下的 16px。"), Variation.MacroOffset))
 	];
 
 	const FHueDistributionResult& Hue = Result.HueDistribution;
@@ -928,6 +1037,137 @@ FReply SBaseColorInspector::HandleAnalyzeClicked()
 		MakeLabelValue(LOCTEXT("DominantPixelCoverage", "Dominant Hue Coverage"),
 			FormatPercent(Hue.DominantHuePixelCoverage), LOCTEXT("DominantCoverageTooltip", "主导色相覆盖率"))
 	];
+
+	ResultsBox->AddSlot().AutoHeight().Padding(0.0f, 14.0f, 0.0f, 6.0f)
+	[
+		SNew(STextBlock).Text(LOCTEXT("SaturationAnalysisHeading", "Saturation Analysis"))
+		.ToolTipText(LOCTEXT("SaturationAnalysisTooltip", "饱和度分析"))
+		.Font(FAppStyle::GetFontStyle("HeadingExtraSmall"))
+	];
+	ResultsBox->AddSlot().AutoHeight().Padding(0.0f, 2.0f)
+	[
+		MakeLabelValue(LOCTEXT("MedianSaturation", "Median Saturation"),
+			FormatPercent(Result.SaturationAnalysis.MedianSaturation),
+			LOCTEXT("MedianSaturationTooltip",
+				"饱和度中位数：一半有效像素的饱和度低于该值，另一半高于该值；内部忽略透明和几乎纯黑的像素。"))
+	];
+
+	ResultsBox->AddSlot().AutoHeight().Padding(0.0f, 14.0f, 0.0f, 6.0f)
+	[
+		SNew(STextBlock).Text(LOCTEXT("LightnessAnalysisHeading", "Lightness Analysis"))
+		.ToolTipText(LOCTEXT("LightnessAnalysisTooltip", "明度分析"))
+		.Font(FAppStyle::GetFontStyle("HeadingExtraSmall"))
+	];
+	ResultsBox->AddSlot().AutoHeight().Padding(0.0f, 2.0f)
+	[
+		MakeLabelValue(LOCTEXT("MedianLuminance", "Median Luminance"),
+			FormatPercent(Result.LightnessAnalysis.MedianLuminance),
+			LOCTEXT("MedianLuminanceTooltip",
+				"明度中位数：一半有效像素比该值暗，另一半比该值亮。使用显示空间 Rec.709 感知亮度计算。"))
+	];
+	ResultsBox->AddSlot().AutoHeight().Padding(0.0f, 2.0f)
+	[
+		MakeLabelValue(LOCTEXT("P05P95Luminance", "P05 / P95 Luminance"),
+			FText::Format(LOCTEXT("LuminancePercentileFormat", "{0} / {1}"),
+				FormatPercent(Result.LightnessAnalysis.P05Luminance),
+				FormatPercent(Result.LightnessAnalysis.P95Luminance)),
+			LOCTEXT("P05P95LuminanceTooltip",
+				"明度第 5 / 95 百分位：排除两端少量极端像素后，描述贴图主体的明暗区间。"))
+	];
+	ResultsBox->AddSlot().AutoHeight().Padding(0.0f, 2.0f)
+	[
+		MakeLabelValue(LOCTEXT("RobustLuminanceRange", "Robust Luminance Range"),
+			FormatPercent(Result.LightnessAnalysis.RobustLuminanceRange),
+			LOCTEXT("RobustLuminanceRangeTooltip",
+				"稳健明度范围：P95 减去 P05。数值越大，主体像素的明暗跨度越大。"))
+	];
+
+	const FTilingPreviewResult& Tiling = Result.TilingPreview;
+	ResultsBox->AddSlot().AutoHeight().Padding(0.0f, 14.0f, 0.0f, 6.0f)
+	[
+		SNew(STextBlock).Text(LOCTEXT("SeamVisibilityHeading", "Seam Visibility"))
+		.ToolTipText(LOCTEXT("SeamVisibilityTooltip",
+			"在多尺度平铺图中检测接缝位置的线能量，并与接缝附近的平行内部线比较。"))
+		.Font(FAppStyle::GetFontStyle("HeadingExtraSmall"))
+	];
+
+	auto VisibilityToText = [](FTilingPreviewResult::ESeamVisibility Visibility)
+	{
+		switch (Visibility)
+		{
+		case FTilingPreviewResult::ESeamVisibility::NearViewOnly:
+			return LOCTEXT("NearViewOnly", "Near-view Only");
+		case FTilingPreviewResult::ESeamVisibility::PersistentSeam:
+			return LOCTEXT("PersistentSeam", "Persistent Seam");
+		default:
+			return LOCTEXT("NotVisible", "Not Visible");
+		}
+	};
+
+	auto FormatRatio = [](float Ratio)
+	{
+		return FText::FromString(FString::Printf(TEXT("%.2fx"), Ratio));
+	};
+
+	auto AddVisibilityMetrics = [&](const FText& DirectionLabel,
+		const FTilingPreviewResult::FSeamVisibilityMetrics& Metrics)
+	{
+		ResultsBox->AddSlot().AutoHeight().Padding(0.0f, 5.0f, 0.0f, 2.0f)
+		[
+			SNew(STextBlock).Text(DirectionLabel)
+				.Font(FAppStyle::GetFontStyle("HeadingExtraSmall"))
+		];
+		ResultsBox->AddSlot().AutoHeight().Padding(0.0f, 2.0f)
+		[
+			MakeLabelValue(LOCTEXT("SeamVisibilityClass", "Visibility"),
+				VisibilityToText(Metrics.Visibility),
+				LOCTEXT("SeamVisibilityClassTooltip",
+					"Not Visible：未检测到异常接缝；Near-view Only：只在近距离明显；Persistent Seam：中远距离仍形成线。Structural Break 不参与此分类。"))
+		];
+		ResultsBox->AddSlot().AutoHeight().Padding(0.0f, 2.0f)
+		[
+			MakeLabelValue(LOCTEXT("NearViewLineSaliency", "Near-view Line Saliency"),
+				FormatRatio(Metrics.NearViewLineSaliency),
+				LOCTEXT("NearViewLineSaliencyTooltip",
+					"原始与 1/2 观察尺度的接缝线能量，相对于附近平行内部线能量的倍数；约 1x 表示没有异常增强。"))
+		];
+		ResultsBox->AddSlot().AutoHeight().Padding(0.0f, 2.0f)
+		[
+			MakeLabelValue(LOCTEXT("MidViewLineSaliency", "Mid-view Line Saliency"),
+				FormatRatio(Metrics.MidViewLineSaliency),
+				LOCTEXT("MidViewLineSaliencyTooltip",
+					"1/4 与 1/8 观察尺度的相对接缝线能量；高于 1x 表示缩小后接缝比附近内部线更突出。"))
+		];
+		ResultsBox->AddSlot().AutoHeight().Padding(0.0f, 2.0f)
+		[
+			MakeLabelValue(LOCTEXT("FarViewLineSaliency", "Far-view Line Saliency"),
+				FormatRatio(Metrics.FarViewLineSaliency),
+				LOCTEXT("FarViewLineSaliencyTooltip",
+					"1/16 观察尺度的相对接缝线能量；数值明显高于 1x 表示远看时接缝仍可能形成直线。"))
+		];
+		ResultsBox->AddSlot().AutoHeight().Padding(0.0f, 2.0f)
+		[
+			MakeLabelValue(LOCTEXT("SeamStructuralBreak", "Structural Break"),
+				FormatPercent(Metrics.StructuralBreak),
+				LOCTEXT("SeamStructuralBreakTooltip",
+					"比较边界两侧窄条在中尺度下的亮度走势相关性；0% 表示结构走势一致，100% 表示高度不相关。"))
+		];
+		ResultsBox->AddSlot().AutoHeight().Padding(0.0f, 2.0f)
+		[
+			MakeLabelValue(LOCTEXT("StructuralBreakReference", "Structural Break Reference"),
+				Metrics.bExceedsStructuralBreakReference
+					? LOCTEXT("AboveStructuralBreakReference", "Above 60%")
+					: LOCTEXT("BelowStructuralBreakReference", "Below 60%"),
+				LOCTEXT("StructuralBreakReferenceTooltip",
+					"暂定 60% 参考线，仅用于样本测试和观察，不参与 Visibility 自动分类。"))
+		];
+	};
+
+	AddVisibilityMetrics(LOCTEXT("LeftRightSeamHeading", "Left-Right Seam"),
+		Tiling.LeftRightVisibility);
+	AddVisibilityMetrics(LOCTEXT("TopBottomSeamHeading", "Top-Bottom Seam"),
+		Tiling.TopBottomVisibility);
+
 	return FReply::Handled();
 }
 

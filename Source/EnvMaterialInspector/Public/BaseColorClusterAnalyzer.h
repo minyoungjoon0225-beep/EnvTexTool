@@ -46,6 +46,56 @@ struct ENVMATERIALINSPECTOR_API FHueDistributionResult
 	TArray<int64> PixelHistogram;
 };
 
+struct ENVMATERIALINSPECTOR_API FSaturationAnalysisResult
+{
+	/** Median display-space HSV saturation of visible, non-near-black pixels. */
+	float MedianSaturation = 0.0f;
+	int64 ValidPixelCount = 0;
+};
+
+struct ENVMATERIALINSPECTOR_API FLightnessAnalysisResult
+{
+	/** Median display-space Rec.709 luma. */
+	float MedianLuminance = 0.0f;
+	/** Fifth percentile of display-space Rec.709 luma. */
+	float P05Luminance = 0.0f;
+	/** Ninety-fifth percentile of display-space Rec.709 luma. */
+	float P95Luminance = 0.0f;
+	/** Robust display-space luminance range: P95 - P05. */
+	float RobustLuminanceRange = 0.0f;
+	int64 ValidPixelCount = 0;
+};
+
+struct ENVMATERIALINSPECTOR_API FTilingPreviewResult
+{
+	enum class ESeamVisibility : uint8
+	{
+		NotVisible,
+		NearViewOnly,
+		PersistentSeam
+	};
+
+	struct FSeamVisibilityMetrics
+	{
+		/** Seam line energy divided by nearby parallel-line energy. Around 1 means normal. */
+		float NearViewLineSaliency = 1.0f;
+		float MidViewLineSaliency = 1.0f;
+		float FarViewLineSaliency = 1.0f;
+		/** 0 means matching boundary structure; 1 means strongly decorrelated structure. */
+		float StructuralBreak = 0.0f;
+		/** Provisional 60% reference only; does not affect the visibility classification. */
+		bool bExceedsStructuralBreakReference = false;
+		ESeamVisibility Visibility = ESeamVisibility::NotVisible;
+	};
+
+	FSeamVisibilityMetrics LeftRightVisibility;
+	FSeamVisibilityMetrics TopBottomVisibility;
+	int32 PreviewWidth = 0;
+	int32 PreviewHeight = 0;
+	/** Display-space BGRA colors for a size-limited 2x2 tiled preview. */
+	TArray<FColor> PreviewPixels;
+};
+
 /** One coverage-sorted color cluster produced by Base Color analysis. */
 struct ENVMATERIALINSPECTOR_API FBaseColorCluster
 {
@@ -65,17 +115,23 @@ enum class EPixelVariationPattern : uint8
 
 struct ENVMATERIALINSPECTOR_API FPixelVariationResult
 {
-	/** 95th percentile of one-pixel sRGB neighbor distance. */
+	/** Actual source-pixel scales used after normalization to a 2048px reference dimension. */
+	int32 MicroOffset = 1;
+	int32 MesoOffset = 4;
+	int32 MacroOffset = 16;
+	int32 FarViewBlockSize = 16;
+	int32 HeatmapBlockSize = 8;
+	/** 95th percentile of resolution-normalized micro-scale sRGB neighbor distance. */
 	float P95NeighborDifference = 0.0f;
-	/** Moderate jump rates measured at 1, 4 and 16 pixel offsets. */
+	/** Jump rates measured at source-pixel offsets equivalent to 1, 4 and 16 px at 2048 resolution. */
 	float MicroJumpRate = 0.0f;
 	float MesoJumpRate = 0.0f;
 	float MacroJumpRate = 0.0f;
-	/** Metrics measured after averaging each 16x16 source region to one color. */
+	/** Metrics measured after averaging each resolution-normalized source region to one color. */
 	float FarViewP95BlockDifference = 0.0f;
 	float FarViewCohesion = 1.0f;
 	float FarViewJumpRate = 0.0f;
-	/** Fraction of the local P95 color difference removed by 16x16 averaging. */
+	/** Fraction of the local P95 color difference removed by normalized far-view averaging. */
 	float DetailDissolutionRatio = 0.0f;
 	EPixelVariationPattern Pattern = EPixelVariationPattern::SmoothContinuous;
 };
@@ -91,11 +147,11 @@ struct ENVMATERIALINSPECTOR_API FBaseColorAnalysisResult
 
 	/** Row-major cluster IDs; contains AnalysisWidth * AnalysisHeight entries. */
 	TArray<int32> ClusterIDMap;
-	/** Local 8x8-block jump-density scores at 1 px, row-major. */
+	/** Resolution-normalized micro-scale local jump-density scores, row-major. */
 	TArray<float> ColorVariationHeatmap;
-	/** Local 8x8-block jump-density scores at 4 px, row-major. */
+	/** Resolution-normalized meso-scale local jump-density scores, row-major. */
 	TArray<float> MesoVariationHeatmap;
-	/** Local 8x8-block jump-density scores at 16 px, row-major. */
+	/** Resolution-normalized macro-scale local jump-density scores, row-major. */
 	TArray<float> MacroVariationHeatmap;
 	int32 ColorVariationHeatmapWidth = 0;
 	int32 ColorVariationHeatmapHeight = 0;
@@ -105,6 +161,9 @@ struct ENVMATERIALINSPECTOR_API FBaseColorAnalysisResult
 	int32 HueContrastHeatmapWidth = 0;
 	int32 HueContrastHeatmapHeight = 0;
 	FHueDistributionResult HueDistribution;
+	FSaturationAnalysisResult SaturationAnalysis;
+	FLightnessAnalysisResult LightnessAnalysis;
+	FTilingPreviewResult TilingPreview;
 };
 
 /** Editor-only TextureSource Base Color analyzer. */

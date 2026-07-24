@@ -31,6 +31,7 @@ private:
 		const TArray<float>& Heatmap, int32 Width, int32 Height, const FName& TextureName,
 		TStrongObjectPtr<UTexture2D>& OutTexture, FSlateBrush& OutBrush);
 	bool BuildHueContrastHeatmapPreview(const FBaseColorAnalysisResult& Result);
+	bool BuildTilingPreview(const FBaseColorAnalysisResult& Result);
 
 	TWeakObjectPtr<UTexture2D> SelectedTexture;
 	int32 ClusterCount = 16;
@@ -46,6 +47,8 @@ private:
 	FSlateBrush MacroVariationHeatmapBrush;
 	TStrongObjectPtr<UTexture2D> HueContrastHeatmapTexture;
 	FSlateBrush HueContrastHeatmapBrush;
+	TStrongObjectPtr<UTexture2D> TilingPreviewTexture;
+	FSlateBrush TilingPreviewBrush;
 	TSharedPtr<SWidgetSwitcher> PreviewSwitcher;
 	int32 ActivePreviewIndex = 1;
 };

@@ -43,11 +43,22 @@ namespace
 	void BuildColorVariationHeatmap(const TArray<FLinearColor>& Pixels, int32 Width, int32 Height,
 		FBaseColorAnalysisResult& OutResult)
 	{
-		constexpr int32 BlockSize = 8;
+		constexpr float ReferenceDimension = 2048.0f;
+		const float ResolutionScale = static_cast<float>(FMath::Max(Width, Height)) / ReferenceDimension;
+		auto ScaleReferencePixels = [ResolutionScale](int32 ReferencePixels)
+		{
+			return FMath::Max(1, FMath::RoundToInt(ReferencePixels * ResolutionScale));
+		};
 		constexpr float ModerateThreshold = 12.0f / 255.0f;
 		constexpr int32 DifferenceHistogramBins = 512;
 
 		FPixelVariationResult& Variation = OutResult.PixelVariation;
+		Variation.MicroOffset = ScaleReferencePixels(1);
+		Variation.MesoOffset = ScaleReferencePixels(4);
+		Variation.MacroOffset = ScaleReferencePixels(16);
+		Variation.FarViewBlockSize = ScaleReferencePixels(16);
+		Variation.HeatmapBlockSize = ScaleReferencePixels(8);
+		const int32 BlockSize = Variation.HeatmapBlockSize;
 		TArray<int64> DifferenceHistogram;
 		DifferenceHistogram.Init(0, DifferenceHistogramBins);
 		int64 MicroEdgeCount = 0;
@@ -94,9 +105,9 @@ namespace
 				: 0.0f;
 		};
 
-		Variation.MicroJumpRate = AccumulateScale(1, true);
-		Variation.MesoJumpRate = AccumulateScale(4, false);
-		Variation.MacroJumpRate = AccumulateScale(16, false);
+		Variation.MicroJumpRate = AccumulateScale(Variation.MicroOffset, true);
+		Variation.MesoJumpRate = AccumulateScale(Variation.MesoOffset, false);
+		Variation.MacroJumpRate = AccumulateScale(Variation.MacroOffset, false);
 		if (MicroEdgeCount > 0)
 		{
 			const int64 P95Target = FMath::CeilToInt64(MicroEdgeCount * 0.95);
@@ -113,10 +124,10 @@ namespace
 			}
 		}
 
-		// Simulate a distant mip-like view by averaging source colors inside 16x16
+		// Simulate a distant mip-like view by averaging source colors inside normalized
 		// regions before comparing adjacent regions. Fine detail that blends at a
 		// distance disappears here, while persistent mosaic blocks remain distinct.
-		constexpr int32 FarViewBlockSize = 16;
+		const int32 FarViewBlockSize = Variation.FarViewBlockSize;
 		constexpr float FarViewLowDifference = 16.0f / 255.0f;
 		constexpr float FarViewHighDifference = 22.0f / 255.0f;
 		const int32 FarViewWidth = FMath::DivideAndRoundUp(Width, FarViewBlockSize);
@@ -263,9 +274,9 @@ namespace
 				}
 			}
 		};
-		BuildScaleHeatmap(1, OutResult.ColorVariationHeatmap);
-		BuildScaleHeatmap(4, OutResult.MesoVariationHeatmap);
-		BuildScaleHeatmap(16, OutResult.MacroVariationHeatmap);
+		BuildScaleHeatmap(Variation.MicroOffset, OutResult.ColorVariationHeatmap);
+		BuildScaleHeatmap(Variation.MesoOffset, OutResult.MesoVariationHeatmap);
+		BuildScaleHeatmap(Variation.MacroOffset, OutResult.MacroVariationHeatmap);
 	}
 
 	void BuildHueContrastHeatmap(const FImage& LinearImage, int32 Width, int32 Height,
@@ -466,6 +477,387 @@ namespace
 			: 0.0f;
 	}
 
+	void AnalyzeSaturation(const FImage& LinearImage, FSaturationAnalysisResult& OutResult)
+	{
+		constexpr int32 HistogramBinCount = 256;
+		constexpr float MinimumVisibleValue = 0.02f;
+		TArray<int64> Histogram;
+		Histogram.Init(0, HistogramBinCount);
+		OutResult = FSaturationAnalysisResult();
+
+		const TArrayView64<const FLinearColor> LinearPixels = LinearImage.AsRGBA32F();
+		for (const FLinearColor& LinearPixel : LinearPixels)
+		{
+			if (LinearPixel.A <= 0.0f)
+			{
+				continue;
+			}
+
+			const FColor SRGB8 = LinearPixel.GetClamped(0.0f, 1.0f).ToFColorSRGB();
+			const FLinearColor DisplayRGB(
+				SRGB8.R / 255.0f,
+				SRGB8.G / 255.0f,
+				SRGB8.B / 255.0f,
+				1.0f);
+			const FLinearColor HSV = DisplayRGB.LinearRGBToHSV();
+			if (HSV.B < MinimumVisibleValue)
+			{
+				continue;
+			}
+
+			const float Saturation = FMath::Clamp(HSV.G, 0.0f, 1.0f);
+			const int32 Bin = FMath::Clamp(
+				FMath::FloorToInt(Saturation * HistogramBinCount),
+				0,
+				HistogramBinCount - 1);
+			++Histogram[Bin];
+			++OutResult.ValidPixelCount;
+		}
+
+		if (OutResult.ValidPixelCount <= 0)
+		{
+			return;
+		}
+
+		const int64 MedianTarget = (OutResult.ValidPixelCount + 1) / 2;
+		int64 Accumulated = 0;
+		for (int32 Bin = 0; Bin < HistogramBinCount; ++Bin)
+		{
+			Accumulated += Histogram[Bin];
+			if (Accumulated >= MedianTarget)
+			{
+				OutResult.MedianSaturation =
+					(static_cast<float>(Bin) + 0.5f) / HistogramBinCount;
+				break;
+			}
+		}
+	}
+
+	void AnalyzeLightness(const FImage& LinearImage, FLightnessAnalysisResult& OutResult)
+	{
+		constexpr int32 HistogramBinCount = 4096;
+		TArray<int64> Histogram;
+		Histogram.Init(0, HistogramBinCount);
+		OutResult = FLightnessAnalysisResult();
+
+		const TArrayView64<const FLinearColor> LinearPixels = LinearImage.AsRGBA32F();
+		for (const FLinearColor& LinearPixel : LinearPixels)
+		{
+			if (LinearPixel.A <= 0.0f)
+			{
+				continue;
+			}
+
+			const FColor SRGB8 = LinearPixel.GetClamped(0.0f, 1.0f).ToFColorSRGB();
+			const float Red = SRGB8.R / 255.0f;
+			const float Green = SRGB8.G / 255.0f;
+			const float Blue = SRGB8.B / 255.0f;
+			const float Luminance = FMath::Clamp(
+				0.2126f * Red + 0.7152f * Green + 0.0722f * Blue,
+				0.0f,
+				1.0f);
+			const int32 Bin = FMath::Clamp(
+				FMath::FloorToInt(Luminance * HistogramBinCount),
+				0,
+				HistogramBinCount - 1);
+			++Histogram[Bin];
+			++OutResult.ValidPixelCount;
+		}
+
+		if (OutResult.ValidPixelCount <= 0)
+		{
+			return;
+		}
+
+		auto FindPercentile = [&](double Quantile)
+		{
+			const int64 Target = FMath::Clamp<int64>(
+				FMath::CeilToInt64(Quantile * OutResult.ValidPixelCount),
+				1,
+				OutResult.ValidPixelCount);
+			int64 Accumulated = 0;
+			for (int32 Bin = 0; Bin < HistogramBinCount; ++Bin)
+			{
+				Accumulated += Histogram[Bin];
+				if (Accumulated >= Target)
+				{
+					return (static_cast<float>(Bin) + 0.5f) / HistogramBinCount;
+				}
+			}
+			return 1.0f;
+		};
+
+		OutResult.P05Luminance = FindPercentile(0.05);
+		OutResult.MedianLuminance = FindPercentile(0.50);
+		OutResult.P95Luminance = FindPercentile(0.95);
+		OutResult.RobustLuminanceRange =
+			FMath::Max(0.0f, OutResult.P95Luminance - OutResult.P05Luminance);
+	}
+
+	void BuildTilingPreview(const TArray<FLinearColor>& Pixels, int32 Width, int32 Height,
+		FTilingPreviewResult& OutResult)
+	{
+		OutResult = FTilingPreviewResult();
+		const int32 ReferenceScales[] = { 1, 2, 4, 8, 16 };
+		const float ResolutionScale =
+			static_cast<float>(FMath::Max(Width, Height)) / 2048.0f;
+		TArray<float> LeftRightSaliencyByScale;
+		TArray<float> TopBottomSaliencyByScale;
+		TArray<FLinearColor> StructureGrid;
+		int32 StructureGridWidth = 0;
+		int32 StructureGridHeight = 0;
+
+		auto ComputeLineEnergy = [](const TArray<FLinearColor>& Grid, int32 GridWidth,
+			int32 GridHeight, bool bLeftRight, int32 InternalLine)
+		{
+			double Energy = 0.0;
+			const int32 SampleCount = bLeftRight ? GridHeight : GridWidth;
+			for (int32 Index = 0; Index < SampleCount; ++Index)
+			{
+				if (bLeftRight)
+				{
+					const int32 RightX = InternalLine == INDEX_NONE ? 0 : InternalLine;
+					const int32 LeftX = InternalLine == INDEX_NONE
+						? GridWidth - 1 : InternalLine - 1;
+					Energy += PixelDistance(
+						Grid[Index * GridWidth + LeftX], Grid[Index * GridWidth + RightX]);
+				}
+				else
+				{
+					const int32 BottomY = InternalLine == INDEX_NONE ? 0 : InternalLine;
+					const int32 TopY = InternalLine == INDEX_NONE
+						? GridHeight - 1 : InternalLine - 1;
+					Energy += PixelDistance(
+						Grid[TopY * GridWidth + Index], Grid[BottomY * GridWidth + Index]);
+				}
+			}
+			return SampleCount > 0 ? static_cast<float>(Energy / SampleCount) : 0.0f;
+		};
+
+		auto ComputeRelativeLineSaliency = [&](const TArray<FLinearColor>& Grid,
+			int32 GridWidth, int32 GridHeight, bool bLeftRight)
+		{
+			const int32 AxisLength = bLeftRight ? GridWidth : GridHeight;
+			if (AxisLength < 3)
+			{
+				return 1.0f;
+			}
+
+			const float SeamEnergy =
+				ComputeLineEnergy(Grid, GridWidth, GridHeight, bLeftRight, INDEX_NONE);
+			TArray<float> NearbyLineEnergies;
+			const int32 NearbyLineCount = FMath::Min(16, (AxisLength - 1) / 2);
+			NearbyLineEnergies.Reserve(NearbyLineCount * 2);
+			for (int32 Offset = 1; Offset <= NearbyLineCount; ++Offset)
+			{
+				NearbyLineEnergies.Add(
+					ComputeLineEnergy(Grid, GridWidth, GridHeight, bLeftRight, Offset));
+				const int32 OppositeLine = AxisLength - Offset;
+				if (OppositeLine != Offset)
+				{
+					NearbyLineEnergies.Add(
+						ComputeLineEnergy(Grid, GridWidth, GridHeight, bLeftRight, OppositeLine));
+				}
+			}
+			NearbyLineEnergies.Sort();
+			const float NearbyMedian = NearbyLineEnergies.IsEmpty()
+				? 0.0f : NearbyLineEnergies[NearbyLineEnergies.Num() / 2];
+			if (NearbyMedian <= UE_SMALL_NUMBER)
+			{
+				return SeamEnergy <= UE_SMALL_NUMBER ? 0.0f : 10.0f;
+			}
+			return FMath::Clamp(SeamEnergy / NearbyMedian, 0.0f, 10.0f);
+		};
+
+		for (const int32 ReferenceScale : ReferenceScales)
+		{
+			const int32 SourceScale =
+				FMath::Max(1, FMath::RoundToInt(ReferenceScale * ResolutionScale));
+			const TArray<FLinearColor>* Grid = &Pixels;
+			int32 GridWidth = Width;
+			int32 GridHeight = Height;
+			TArray<FLinearColor> AveragedGrid;
+			if (SourceScale > 1)
+			{
+				GridWidth = FMath::DivideAndRoundUp(Width, SourceScale);
+				GridHeight = FMath::DivideAndRoundUp(Height, SourceScale);
+				AveragedGrid.SetNumUninitialized(GridWidth * GridHeight);
+				for (int32 GridY = 0; GridY < GridHeight; ++GridY)
+				{
+					const int32 StartY = GridY * SourceScale;
+					const int32 EndY = FMath::Min(StartY + SourceScale, Height);
+					for (int32 GridX = 0; GridX < GridWidth; ++GridX)
+					{
+						const int32 StartX = GridX * SourceScale;
+						const int32 EndX = FMath::Min(StartX + SourceScale, Width);
+						FLinearColor Sum = FLinearColor::Black;
+						int32 SampleCount = 0;
+						for (int32 Y = StartY; Y < EndY; ++Y)
+						{
+							for (int32 X = StartX; X < EndX; ++X)
+							{
+								Sum += Pixels[Y * Width + X];
+								++SampleCount;
+							}
+						}
+						AveragedGrid[GridY * GridWidth + GridX] =
+							SampleCount > 0 ? Sum / SampleCount : FLinearColor::Black;
+					}
+				}
+				Grid = &AveragedGrid;
+			}
+
+			LeftRightSaliencyByScale.Add(
+				ComputeRelativeLineSaliency(*Grid, GridWidth, GridHeight, true));
+			TopBottomSaliencyByScale.Add(
+				ComputeRelativeLineSaliency(*Grid, GridWidth, GridHeight, false));
+			if (ReferenceScale == 4)
+			{
+				StructureGrid = *Grid;
+				StructureGridWidth = GridWidth;
+				StructureGridHeight = GridHeight;
+			}
+		}
+
+		auto ComputeStructuralBreak = [](const TArray<FLinearColor>& Grid, int32 GridWidth,
+			int32 GridHeight, bool bLeftRight)
+		{
+			const int32 SampleCount = bLeftRight ? GridHeight : GridWidth;
+			if (SampleCount <= 0)
+			{
+				return 0.0f;
+			}
+			const int32 BandWidth = FMath::Min(
+				4, bLeftRight ? GridWidth : GridHeight);
+			TArray<float> ProfileA;
+			TArray<float> ProfileB;
+			ProfileA.SetNumUninitialized(SampleCount);
+			ProfileB.SetNumUninitialized(SampleCount);
+			double MeanA = 0.0;
+			double MeanB = 0.0;
+			for (int32 Index = 0; Index < SampleCount; ++Index)
+			{
+				float SumA = 0.0f;
+				float SumB = 0.0f;
+				if (bLeftRight)
+				{
+					for (int32 Offset = 0; Offset < BandWidth; ++Offset)
+					{
+						SumA += Grid[Index * GridWidth + GridWidth - 1 - Offset].GetLuminance();
+						SumB += Grid[Index * GridWidth + Offset].GetLuminance();
+					}
+				}
+				else
+				{
+					for (int32 Offset = 0; Offset < BandWidth; ++Offset)
+					{
+						SumA += Grid[(GridHeight - 1 - Offset) * GridWidth + Index].GetLuminance();
+						SumB += Grid[Offset * GridWidth + Index].GetLuminance();
+					}
+				}
+				ProfileA[Index] = SumA / BandWidth;
+				ProfileB[Index] = SumB / BandWidth;
+				MeanA += ProfileA[Index];
+				MeanB += ProfileB[Index];
+			}
+			MeanA /= SampleCount;
+			MeanB /= SampleCount;
+
+			double Covariance = 0.0;
+			double VarianceA = 0.0;
+			double VarianceB = 0.0;
+			for (int32 Index = 0; Index < SampleCount; ++Index)
+			{
+				const double CenteredA = ProfileA[Index] - MeanA;
+				const double CenteredB = ProfileB[Index] - MeanB;
+				Covariance += CenteredA * CenteredB;
+				VarianceA += CenteredA * CenteredA;
+				VarianceB += CenteredB * CenteredB;
+			}
+			if (VarianceA <= UE_SMALL_NUMBER && VarianceB <= UE_SMALL_NUMBER)
+			{
+				return 0.0f;
+			}
+			if (VarianceA <= UE_SMALL_NUMBER || VarianceB <= UE_SMALL_NUMBER)
+			{
+				return 1.0f;
+			}
+			const float Correlation = static_cast<float>(
+				Covariance / FMath::Sqrt(VarianceA * VarianceB));
+			return FMath::Clamp(1.0f - FMath::Max(Correlation, 0.0f), 0.0f, 1.0f);
+		};
+
+		auto FillVisibilityMetrics = [&](const TArray<float>& SaliencyByScale,
+			bool bLeftRight, FTilingPreviewResult::FSeamVisibilityMetrics& OutMetrics)
+		{
+			if (SaliencyByScale.Num() < 5)
+			{
+				return;
+			}
+			OutMetrics.NearViewLineSaliency =
+				(SaliencyByScale[0] + SaliencyByScale[1]) * 0.5f;
+			OutMetrics.MidViewLineSaliency =
+				(SaliencyByScale[2] + SaliencyByScale[3]) * 0.5f;
+			OutMetrics.FarViewLineSaliency = SaliencyByScale[4];
+			OutMetrics.StructuralBreak = ComputeStructuralBreak(
+				StructureGrid, StructureGridWidth, StructureGridHeight, bLeftRight);
+			constexpr float StructuralBreakReference = 0.60f;
+			OutMetrics.bExceedsStructuralBreakReference =
+				OutMetrics.StructuralBreak >= StructuralBreakReference;
+
+			const bool bPersistentLine =
+				OutMetrics.MidViewLineSaliency >= 1.5f ||
+				OutMetrics.FarViewLineSaliency >= 1.35f;
+			if (bPersistentLine)
+			{
+				OutMetrics.Visibility =
+					FTilingPreviewResult::ESeamVisibility::PersistentSeam;
+			}
+			else if (OutMetrics.NearViewLineSaliency >= 1.5f)
+			{
+				OutMetrics.Visibility = FTilingPreviewResult::ESeamVisibility::NearViewOnly;
+			}
+			else
+			{
+				OutMetrics.Visibility = FTilingPreviewResult::ESeamVisibility::NotVisible;
+			}
+		};
+
+		FillVisibilityMetrics(
+			LeftRightSaliencyByScale, true, OutResult.LeftRightVisibility);
+		FillVisibilityMetrics(
+			TopBottomSaliencyByScale, false, OutResult.TopBottomVisibility);
+
+		constexpr int32 MaximumTilePreviewDimension = 512;
+		const float PreviewScale = FMath::Min(
+			1.0f,
+			static_cast<float>(MaximumTilePreviewDimension) / FMath::Max(Width, Height));
+		const int32 TileWidth = FMath::Max(1, FMath::RoundToInt(Width * PreviewScale));
+		const int32 TileHeight = FMath::Max(1, FMath::RoundToInt(Height * PreviewScale));
+		OutResult.PreviewWidth = TileWidth * 2;
+		OutResult.PreviewHeight = TileHeight * 2;
+		OutResult.PreviewPixels.SetNumUninitialized(
+			OutResult.PreviewWidth * OutResult.PreviewHeight);
+		for (int32 Y = 0; Y < OutResult.PreviewHeight; ++Y)
+		{
+			const int32 TileY = Y % TileHeight;
+			const int32 SourceY = FMath::Clamp(
+				FMath::FloorToInt((TileY + 0.5f) * Height / TileHeight), 0, Height - 1);
+			for (int32 X = 0; X < OutResult.PreviewWidth; ++X)
+			{
+				const int32 TileX = X % TileWidth;
+				const int32 SourceX = FMath::Clamp(
+					FMath::FloorToInt((TileX + 0.5f) * Width / TileWidth), 0, Width - 1);
+				const FLinearColor& Color = Pixels[SourceY * Width + SourceX];
+				OutResult.PreviewPixels[Y * OutResult.PreviewWidth + X] = FColor(
+					FMath::Clamp(FMath::RoundToInt(Color.R * 255.0f), 0, 255),
+					FMath::Clamp(FMath::RoundToInt(Color.G * 255.0f), 0, 255),
+					FMath::Clamp(FMath::RoundToInt(Color.B * 255.0f), 0, 255),
+					255);
+			}
+		}
+	}
+
 	int32 FindNearestCenter(const FLinearColor& Pixel, const TArray<FLinearColor>& Centers)
 	{
 		int32 BestIndex = 0;
@@ -537,6 +929,17 @@ bool FBaseColorClusterAnalyzer::AnalyzeTexture(UTexture2D* Texture, int32 Cluste
 		OutError = LOCTEXT("InvalidDimensions", "The texture has no valid source image.");
 		return false;
 	}
+	constexpr int32 MaximumSupportedDimension = 4096;
+	if (OutResult.SourceWidth > MaximumSupportedDimension ||
+		OutResult.SourceHeight > MaximumSupportedDimension)
+	{
+		OutError = FText::Format(
+			LOCTEXT("TextureTooLarge",
+				"Texture resolution {0} x {1} exceeds the current maximum supported dimension of 4096 pixels."),
+			FText::AsNumber(OutResult.SourceWidth),
+			FText::AsNumber(OutResult.SourceHeight));
+		return false;
+	}
 
 	FImage SourceImage;
 	if (!Texture->Source.GetMipImage(SourceImage, 0))
@@ -561,6 +964,8 @@ bool FBaseColorClusterAnalyzer::AnalyzeTexture(UTexture2D* Texture, int32 Cluste
 	BuildSettings.bUseNewMipFilter = Texture->bUseNewMipFilter;
 	ITextureCompressorModule::AdjustImageColors(LinearImage, BuildSettings);
 	AnalyzeHueDistribution(LinearImage, HueSettings, OutResult.HueDistribution);
+	AnalyzeSaturation(LinearImage, OutResult.SaturationAnalysis);
+	AnalyzeLightness(LinearImage, OutResult.LightnessAnalysis);
 
 	// Continuity must use the original source grid. Downsampling would remove
 	// high-frequency transitions and change the neighbor topology.
@@ -570,6 +975,8 @@ bool FBaseColorClusterAnalyzer::AnalyzeTexture(UTexture2D* Texture, int32 Cluste
 
 	TArray<FLinearColor> Pixels;
 	BuildAnalysisPixels(LinearImage, Pixels);
+	BuildTilingPreview(Pixels, OutResult.AnalysisWidth, OutResult.AnalysisHeight,
+		OutResult.TilingPreview);
 	BuildColorVariationHeatmap(Pixels, OutResult.AnalysisWidth, OutResult.AnalysisHeight, OutResult);
 	const int32 MaximumK = FMath::Min(32, Pixels.Num());
 	const int32 K = FMath::Clamp(ClusterCount, FMath::Min(8, MaximumK), MaximumK);
